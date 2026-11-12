@@ -19,5 +19,5 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install pyte
       - if: runner.os == 'Windows'
-        run: python -m pip install --only-binary=:all: pywinpty
+        run: 'python -m pip install --only-binary=:all: pywinpty'
       - run: python -B -u .github/platform_playtest.py
