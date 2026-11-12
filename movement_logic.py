@@ -4,7 +4,7 @@ import sys
 import time
 
 from engine_puzzles import IGNITION_SLOT, PANEL_HINTS, panel_lines, solves_panel
-from turn_input import read_turn
+from turn_input import PASTED_MOVE, read_turn
 
 def intro_terminal_size():
     try:
@@ -289,6 +289,7 @@ def panel_answer(lines, prompt="Setting > ", max_length=16):
     """Bound puzzle input to one screen, including invalid or pasted input."""
     saved = None
     answer = ""
+    overflow = 0
     previous = None
     try:
         if sys.stdin.isatty() and os.name == "posix":
@@ -311,11 +312,18 @@ def panel_answer(lines, prompt="Setting > ", max_length=16):
             if not ready or intro_terminal_size() != size:
                 continue
             if key in ("\n", "\r"):
-                return answer.strip()
+                # Reject overflow so a truncated prefix cannot be submitted.
+                return "\x00" if overflow else answer.strip()
             if key in ("\x08", "\x7f"):
-                answer = answer[:-1]
-            elif key and len(key) == 1 and " " <= key <= "~" and len(answer) < max_length:
-                answer += key
+                if overflow:
+                    overflow -= 1
+                else:
+                    answer = answer[:-1]
+            elif max_length and key and len(key) == 1 and " " <= key <= "~":
+                if len(answer) < max_length:
+                    answer += key
+                else:
+                    overflow += 1
     except (EOFError, KeyboardInterrupt):
         raise SystemExit(0)
     finally:
@@ -369,15 +377,19 @@ def secret_ending():
 
 
 def debug_menu():
-    print("DEBUG MENU")
-    print("Press Enter for the full game.")
-    print("Type 'forest' to start at the forest.")
-    print("Type 'ship' to start at the ship.")
+    lines = [
+        "DEBUG MENU",
+        "Press Enter for the full game.",
+        "Type 'forest' to start at the forest.",
+        "Type 'ship' to start at the ship.",
+    ]
+    feedback = []
     while True:
-        command = input("> ").strip().lower()
+        command = panel_answer(lines + feedback, "> ", 16).lower()
         if command in ("", "forest", "ship"):
             return command or "full"
-        print("Unknown command. Use forest, ship, or press Enter.")
+        feedback = ["", "Unknown command. Use forest, ship, or press Enter."]
+
 
 raw_map = [
     "##########################################################",
@@ -423,66 +435,71 @@ help_unlocked = False
 
 
 def enter_shop():
-    print()
-    print(f"enter 1 for +50 Battery (Bought {s['battery_buys']}/2) - 40cc")
-    print("enter 2 for 1 Trap            - 20cc")
-    print("enter 3 for 2 Big Bangs       - 30cc")
-    try:
-        opt = int(input())
-    except ValueError:
-        print("Invalid input")
-        return
+    feedback = ""
+    while True:
+        lines = [
+            "SUPPLY SHOP",
+            "",
+            f"[1] +50 battery (40 coins) | Bought {s['battery_buys']}/2",
+            "[2] 1 trap (20 coins)",
+            "[3] 2 Big Bangs (30 coins)",
+            "",
+            f"Coins: {s['coins']}",
+            "Enter 1, 2, or 3 to buy, or X to leave.",
+        ]
+        if feedback:
+            lines.extend(("", feedback))
+        choice = panel_answer(lines, "Shop choice > ").upper()
+        if choice == "X":
+            return "You leave the shop."
+        if choice in ("1", "2", "3"):
+            break
+        feedback = "Invalid choice. Enter 1, 2, 3, or X."
 
-    if (opt == 1) and s["coins"] >= 40:
-        if s["battery_buys"] < 2:
-            s["flash"] += 50
-            s["coins"] -= 40
-            s["battery_buys"] += 1
-        else:
-            print("Out of stock! You already bought batteries twice.")
-    elif (opt == 2) and s["coins"] >= 20:
-        s["traps"] += 1
-        s["coins"] -= 20
-    elif (opt == 3) and s["coins"] >= 30:
-        s["bangs"] += 2
-        s["coins"] -= 30
-    elif opt not in (1, 2, 3):
-        print("invalid input")
-    else:
-        print("Not enough money")
+    item, amount, price = {
+        "1": ("flash", 50, 40),
+        "2": ("traps", 1, 20),
+        "3": ("bangs", 2, 30),
+    }[choice]
+    if s["coins"] < price:
+        return f"You need {price} coins for that purchase."
+    if item == "flash":
+        if s["battery_buys"] >= 2:
+            return "Battery sold out. You have already bought two."
+        s["battery_buys"] += 1
+    s["coins"] -= price
+    s[item] += amount
+    return {
+        "1": "Purchased +50 flashlight battery.",
+        "2": "Purchased 1 trap.",
+        "3": "Purchased 2 Big Bangs.",
+    }[choice]
 
 
 def open_terminal():
     global help_unlocked
     help_unlocked = True
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print("SURVIVAL MANUAL (PAGE 1/2)")
-    print("-" * 40)
-    print("MISSION LOG:")
-    print("You are a space engineer. Your ship crashed in a")
-    print("dark, uncharted forest. The radar shows ship parts")
-    print("scattered nearby. You need to fix the ship to survive.")
-    print("\nCONTROLS:")
-    print("W A S D   - Move one tile per keypress (Costs battery)")
-    print("F then WASD - Aim a flash attack to stun enemies")
-    print("T         - Drop Trap (Step off to arm)")
-    print("E         - Interact (Read terminal, buy from shop)")
-    print("H         - Reopen this help menu")
-    print("X         - Quit game")
-    input("\nPress Enter for next page > ")
-
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print("SURVIVAL MANUAL (PAGE 2/2)")
-    print("-" * 40)
-    print("THREATS:")
-    print("GHOSTS (G) - Roam the forest. Avoid their paths.")
-    print("HUNTER (H) - Actively tracks you. Can cut you off.")
-    print("\nOBJECTIVES:")
-    print("1. Collect debris coins (*) to buy supplies at the shop ($).")
-    print("2. Find the exit (>) to reach your crashed ship.")
-    print("3. Repair the upper engine, then the lower engine.")
-    print("4. Access the Reactor [R] to trigger the final sequence.")
-    input("\nPress Enter to close > ")
+    panel_answer([
+        "SURVIVAL MANUAL (PAGE 1/2)",
+        "",
+        "WASD       Move one tile per keypress (costs battery)",
+        "F + WASD   Aim a flash attack to stun enemies",
+        "T          Drop a trap. Step off it to arm it.",
+        "E          Use the help terminal, shop, or control panel",
+        "H          Reopen this manual",
+        "X          Quit game",
+    ], "Press Enter for next page > ", 0)
+    panel_answer([
+        "SURVIVAL MANUAL (PAGE 2/2)",
+        "",
+        "GHOSTS (G) - Roam the forest. Avoid their paths.",
+        "HUNTER (H) - Actively tracks you. Can cut you off.",
+        "",
+        "1. Collect coins (*) to buy supplies at the shop ($).",
+        "2. Reach > on the right to return to your ship.",
+        "3. Repair the upper engine [1], then the lower engine [2].",
+        "4. Reach the reactor room [R] on the left side of the deck.",
+    ], "Press Enter to close > ", 0)
 
 
 def open_tile(x, y):
@@ -522,15 +539,21 @@ def trap_at(x, y):
 
 
 def terminal_ready():
-    try:
-        width, height = os.get_terminal_size(sys.stdout.fileno())
-    except (OSError, ValueError):
-        width, height = 80, 24
-    if width < 80 or height < 24:
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print("Resize terminal to 80x24 or above to continue.")
-        return False
-    return True
+    size = intro_terminal_size()
+    if size[0] >= 80 and size[1] >= 24:
+        return True
+    intro_draw([], "", size)
+    return False
+
+
+def read_map_turn(redraw):
+    while True:
+        if terminal_ready():
+            move = read_turn()
+            if move == "X" or terminal_ready():
+                return move
+        panel_answer(["Terminal resized. Press Enter to resume."], "Continue > ", 0)
+        redraw()
 
 
 def print_dialogue(msg, width=78, max_lines=4):
@@ -541,6 +564,62 @@ def print_dialogue(msg, width=78, max_lines=4):
         lines.extend(textwrap.wrap(paragraph, width=width) or [""])
     for line in lines[:max_lines]:
         print(line)
+
+
+MAP_COLORS = {
+    "@": "96", "☺": "96",
+    "1": "93", "2": "93", "R": "93", "C": "93", "?": "93",
+    ">": "92", "<": "92",
+    "$": "95", "*": "95",
+}
+
+
+def map_color_enabled():
+    return (os.name == "posix" and sys.stdout.isatty()
+            and os.environ.get("TERM") not in (None, "dumb")
+            and "NO_COLOR" not in os.environ)
+
+
+def player_icon(color):
+    encoding = (sys.stdout.encoding or "").lower().replace("-", "")
+    # The text-presentation face occupies one map cell on UTF-8 terminals.
+    return "☺" if color and encoding == "utf8" else "@"
+
+
+def print_map(display, panel, show_floor):
+    color = map_color_enabled()
+    icon = player_icon(color)
+    for index, row in enumerate(display):
+        tiles = "".join(row).replace("@", icon)
+        if not show_floor:
+            tiles = tiles.replace(".", " ")
+        side = panel[index].replace("@", icon) if index < len(panel) else ""
+        tiles = f"{tiles:<60}"
+        if color:
+            tiles = "".join(
+                f"\033[{MAP_COLORS[tile]}m{tile}\033[0m" if tile in MAP_COLORS else tile
+                for tile in tiles
+            )
+        print(f"{tiles} {side}".rstrip())
+
+
+def show_forest_briefing():
+    panel_answer([
+        "LEVEL 1 - SURVIVE THE FOREST",
+        "",
+        f"You are {player_icon(map_color_enabled())}, near the top-left corner.",
+        "Reach > on the right side of the map to return to the ship.",
+        "",
+        "Press W up, A left, S down, or D right to move one tile.",
+        "Each step drains your battery. Walls (#) block movement.",
+        "",
+        "Stand next to ? and press E for help. H reopens it later.",
+        "Walk over * to collect coins. Press E next to $ to buy supplies.",
+        "",
+        "Press T to drop a trap. Move off it to arm it.",
+        "Press F, then a direction key, to fire a flash.",
+        "Press X to quit.",
+    ], "Press Enter to enter the forest > ", 0)
 
 
 def draw(msg=""):
@@ -554,18 +633,23 @@ def draw(msg=""):
             if alien_stunned[i] > 0:
                 symbol = symbol.lower()
             display[y][x] = symbol
-    print("LEVEL 1 - FOREST | OBJECTIVE: RETURN TO SHIP (>)")
+    print("LEVEL 1 - FOREST")
+    print("Goal: Reach > on the right to return to your ship.")
     panel = [
         f"Flash: {s['flash']}%",
         f"Coins: {s['coins']}",
         f"Charges: {s['bangs']}",
         f"Traps: {s['traps']}",
         "",
-        "X quit",
+        "@ You  # Wall",
+        "> Ship exit",
+        "? Help  $ Shop",
+        "* Coins",
+        "WASD Move",
+        "E Use  X Quit",
+        "T Trap  F Flash",
     ]
-    for index, row in enumerate(display):
-        side = panel[index] if index < len(panel) else ""
-        print(f"{''.join(row).replace('.', ' '):<60} {side:<19}")
+    print_map(display, panel, show_floor=False)
     print_dialogue(msg)
 
 
@@ -733,8 +817,8 @@ elif debug_mode == "forest":
     time.sleep(0.5)
 
 if debug_mode != "ship":
-    draw("You hear rustling among the leaves.\n"
-         "Move beside ? and press E for help. Press H to reopen it afterward.")
+    show_forest_briefing()
+    draw("Move with WASD. Stand next to ? and press E for more help.")
 
 clear_first_level = debug_mode == "ship"
 while debug_mode != "ship":
@@ -744,7 +828,7 @@ while debug_mode != "ship":
     action_taken = False
     trap_placed = False
     msg = ""
-    move = read_turn()
+    move = read_map_turn(draw)
 
     if move == "W":
         target_y -= 1
@@ -782,8 +866,7 @@ while debug_mode != "ship":
             msg = "Manual closed."
             action_taken = True
         elif near_tile("$"):
-            enter_shop()
-            msg = "Left the shop."
+            msg = enter_shop()
             action_taken = True
         else:
             msg = "Get closer to the shop ($) or terminal (?) first."
@@ -800,7 +883,7 @@ while debug_mode != "ship":
         elif direction == "D":
             dx += 1
         else:
-            msg = "Invalid flash direction. Use F W, F A, F S or F D."
+            msg = "Use W, A, S, or D to aim the flash."
             draw(msg)
             continue
 
@@ -822,8 +905,11 @@ while debug_mode != "ship":
 
     elif move == "X":
         break
+    elif move == PASTED_MOVE:
+        draw("Press one key at a time to move. Pasted text was ignored.")
+        continue
     else:
-        draw("Invalid input")
+        draw("Unknown command. Use WASD to move, E to interact, or X to quit.")
         continue
 
     if valid_move:
@@ -845,7 +931,7 @@ while debug_mode != "ship":
                 continue
             if ship_exit:
                 clear_first_level = True
-                draw("You made it out of the dark woods.")
+                draw("You escaped the forest and reached your ship.")
             else:
                 secret_ending()
             break
@@ -964,8 +1050,25 @@ reactor_map = [
 ]
 
 
-def at_engine_panel():
+def at_control_panel():
     return s["grid"][s["py"]][s["px"]] == "C" or near_tile("C")
+
+
+def ship_objective():
+    if room == "ship":
+        if not engine_fixed["engine_1"]:
+            return "Enter the upper engine room [1] at the top of the deck."
+        if not engine_fixed["engine_2"]:
+            return "Enter the lower engine room [2] at the bottom of the deck."
+        return "Reach the reactor room [R] on the left side of the deck."
+    if room == "reactor" and stage == "repair":
+        return "Return via < and repair both engines first."
+    if room in engine_fixed:
+        if engine_fixed[room]:
+            return "Engine repaired. Walk to < to return to the main deck."
+        if room == "engine_2" and not engine_fixed["engine_1"]:
+            return "Return via < and repair the upper engine [1] first."
+    return "Stand next to C or on it, then press E."
 
 
 def draw_level_2(msg=""):
@@ -976,6 +1079,11 @@ def draw_level_2(msg=""):
     display = [row[:] for row in s["grid"]]
 
     if room == "ship":
+        # Label the doors on screen without changing their collision tiles.
+        upper_door = s["grid"][0].index("E")
+        lower_door = s["grid"][-1].index("E")
+        display[0][upper_door] = "1"
+        display[-1][lower_door] = "2"
         for trap in s["tl"]:
             display[trap["ty"]][trap["tx"]] = "X"
 
@@ -998,25 +1106,26 @@ def draw_level_2(msg=""):
     }
     upper = "ON" if engine_fixed["engine_1"] else "OFF"
     lower = "ON" if engine_fixed["engine_2"] else "OFF"
-    if stage == "repair":
-        objective = "Repair Lower" if engine_fixed["engine_1"] else "Repair Upper"
-    elif stage == "escape":
-        objective = "Check controls >"
-    else:
-        objective = "Activate reactor"
-    print(f"L2 | {room_names[room]} | U:{upper} L:{lower} "
-          f"({sum(engine_fixed.values())}/2) | {objective}")
+    repaired = sum(engine_fixed.values())
+    print(f"L2 - {room_names[room]} | Engines: {repaired}/2 | "
+          f"Upper: {upper} | Lower: {lower}")
+    print(f"Goal: {ship_objective()}")
     panel = [
         f"Flash: {s['flash']}%",
         f"Traps: {s['traps']}",
-        f"Engines: {sum(engine_fixed.values())}/2",
         "",
-        "X quit",
+        "@ You  # Wall",
+        ". Walkable floor",
     ]
-    for index, row in enumerate(display):
-        side = panel[index] if index < len(panel) else ""
-        print(f"{''.join(row).replace('.', ' '):<60} {side}".rstrip())
-    print_dialogue(msg)
+    if room == "ship":
+        panel.extend(("[1] Upper engine", "[2] Lower engine", "[R] Reactor", "> Helm"))
+    else:
+        panel.extend(("C Control panel", "< Back to deck"))
+    panel.append("E Use  X Quit")
+    print_map(display, panel, show_floor=True)
+
+    # Reserve two lines above the map and one for the input prompt.
+    print_dialogue(msg, max_lines=min(4, 21 - len(display)))
 
 
 def change_room(new_room, x, y):
@@ -1032,7 +1141,7 @@ def use_panel():
     global stage, enemies_active, level_2_clear
 
     if room in engine_fixed:
-        if not at_engine_panel():
+        if not at_control_panel():
             return "Walk to C or a tile beside it, then press E."
 
         if engine_fixed[room]:
@@ -1042,6 +1151,7 @@ def use_panel():
             return "Repair the upper engine first to get its starter position."
 
         hints = PANEL_HINTS[room]
+        invalid_format = False
         while True:
             lines = list(panel_lines(room))
             if engine_attempts[room]:
@@ -1051,10 +1161,16 @@ def use_panel():
                     "Incorrect setting. Check the clues and try again.",
                     f"Hint {hint_number}/{len(hints)}: {hints[hint_number - 1]}",
                 ))
+            if invalid_format:
+                lines.extend(("", "Enter three digits, or X to close the panel."))
             answer = panel_answer(lines)
             if answer.upper() == "X":
                 return "Panel closed."
-            if solves_panel(room, answer):
+            digits = "".join(answer.split())
+            invalid_format = len(digits) != 3 or not digits.isascii() or not digits.isdecimal()
+            if invalid_format:
+                continue
+            if solves_panel(room, digits):
                 break
             engine_attempts[room] += 1
 
@@ -1074,22 +1190,20 @@ def use_panel():
             enemies_active = True
 
             return (
-                "Engine 2 starts with a deafening roar, then the ship shudders.\n"
-                "A churning explosion tears through the engine room.\n"
-                "Something climbs aboard the ship.\n"
+                "Both engines are repaired, but the ship shudders.\n"
                 "The Ghost and Hunter are here!\n"
-                "Go to the Reactor at [R]."
+                "Return via < and reach the reactor [R] on the deck."
             )
 
         return (
             "Upper engine repaired. The ship lights are back on.\n"
-            f"Starter position {IGNITION_SLOT} unlocks the lower engine."
+            "Return via < and enter the lower engine room [2]."
         )
 
 
     if room == "ship":
         if not near_tile(">"):
-            return "There is nothing to use here."
+            return "Nothing to use here. Walk through a marked door."
 
         if stage == "repair":
             return "No power. Repair both engines first."
@@ -1097,16 +1211,13 @@ def use_panel():
         stage = "reactor"
 
         return (
-            "The engines are running, but the ship cannot move.\n"
-            "The hull is damaged..\n"
-            "There is no way out.\n"
-            "You must destroy the ship with the creatures aboard.\n"
-            "Go to the reactor room."
+            "The hull is damaged. The ship cannot take off.\n"
+            "Go to the reactor room [R] with the creatures still aboard."
         )
 
     if room == "reactor":
-        if not near_tile("C"):
-            return "Move closer to the control panel."
+        if not at_control_panel():
+            return "Walk to C or a tile beside it, then press E."
 
         if not all(engine_fixed.values()):
             return "Repair both engines first."
@@ -1322,20 +1433,19 @@ if clear_first_level:
     alien_stunned = [0, 0]
     turn = 0
 
-    draw_level_2(
-        "You make it back to your ship.\n"
-        "The forest falls silent behind you as you reach the hull."
-    )
-    input("Press Enter to board your ship > ")
-    draw_level_2(
-        "Inside, the ship is dark and powerless.\n"
-        "The engines are damaged, but the ship is still reparable.\n"
-        "Repair both engines and get the ship moving again."
-    )
-    input("Press Enter to begin repairs > ")
+    panel_answer([
+        "LEVEL 2 - CRASHED SHIP",
+        "",
+        "You made it back to your ship.",
+        "Your battery keeps draining until the upper engine is repaired.",
+        "",
+        "Walk through [1] at the top of the deck. Find C and press E beside it.",
+        "After the repair, use < to return and enter [2] at the bottom.",
+    ], "Press Enter to board your ship > ", 0)
+    draw_level_2("You're aboard. The ship is dark and powerless.")
 
     while not level_2_clear:
-        move = read_turn()
+        move = read_map_turn(draw_level_2)
         move = move.replace(" ", "")
 
         msg = ""
@@ -1402,19 +1512,16 @@ if clear_first_level:
                         change_room("engine_2", 14, 1)
 
                     changed_map = True
-                    if engine_fixed[room]:
-                        msg = "Engine repaired. Walk to < to return to the main deck."
-                    elif room == "engine_2" and not engine_fixed["engine_1"]:
-                        msg = "Lower engine locked. Return via < and repair the upper engine."
-                    else:
-                        msg = "Find C. Stand on it or next to it, then press E to repair."
+                    msg = "You entered the upper engine room." if target_y == 0 else (
+                        "You entered the lower engine room."
+                    )
 
                 elif room == "ship" and tile == "R":
                     return_position = (s["px"], s["py"])
                     change_room("reactor", 27, 9)
 
                     changed_map = True
-                    msg = "Reactor room. Find the control panel."
+                    msg = "You entered the reactor room."
 
                 elif room != "ship" and tile == "<":
                     change_room(
@@ -1440,7 +1547,7 @@ if clear_first_level:
             continue
         elif move == "E":
             msg = use_panel()
-            action_taken = True
+            action_taken = room == "ship" and enemies_active and near_tile(">")
 
         elif move == "T":
             if room != "ship":
@@ -1497,8 +1604,12 @@ if clear_first_level:
                                 alien_stunned[i] = 5
                                 msg += f" {alien_names[i]} stunned for 5 turns!"
 
+        elif move == PASTED_MOVE:
+            msg = "Press one key at a time to move. Pasted text was ignored."
+        elif move == "F?":
+            msg = "Use W, A, S, or D to aim the flash."
         else:
-            msg = "Invalid input."
+            msg = "Unknown command. Use WASD to move, E to interact, or X to quit."
 
         if level_2_clear:
             explosion_animation()
