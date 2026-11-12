@@ -574,21 +574,20 @@ MAP_COLORS = {
 }
 
 
-def map_color_enabled():
-    return (os.name == "posix" and sys.stdout.isatty()
-            and os.environ.get("TERM") not in (None, "dumb")
-            and "NO_COLOR" not in os.environ)
+def plain_map():
+    return (not sys.stdout.isatty() or os.environ.get("TERM") == "dumb"
+            or "NO_COLOR" in os.environ)
 
 
-def player_icon(color):
+def player_icon():
     encoding = (sys.stdout.encoding or "").lower().replace("-", "")
-    # The text-presentation face occupies one map cell on UTF-8 terminals.
-    return "☺" if color and encoding == "utf8" else "@"
+    # Use the one-cell text face in UTF-8 terminals, including Windows ConPTY.
+    return "☺" if not plain_map() and encoding == "utf8" else "@"
 
 
 def print_map(display, panel, show_floor):
-    color = map_color_enabled()
-    icon = player_icon(color)
+    color = os.name == "posix" and bool(os.environ.get("TERM")) and not plain_map()
+    icon = player_icon()
     for index, row in enumerate(display):
         tiles = "".join(row).replace("@", icon)
         if not show_floor:
@@ -607,7 +606,7 @@ def show_forest_briefing():
     panel_answer([
         "LEVEL 1 - SURVIVE THE FOREST",
         "",
-        f"You are {player_icon(map_color_enabled())}, near the top-left corner.",
+        f"You are {player_icon()}, near the top-left corner.",
         "Reach > on the right side of the map to return to the ship.",
         "",
         "Press W up, A left, S down, or D right to move one tile.",

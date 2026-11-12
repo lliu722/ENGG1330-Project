@@ -14,17 +14,22 @@ WINDOWS = os.name == "nt"
 GAME = str(Path("movement_logic.py").resolve())
 PROMPT = "Move [WASD"
 SELECT = "Choose 1 or 2, then press Enter >"
-ICON = "@" if WINDOWS else "☺"
+ICON = "☺"
 ENTER = "\r" if WINDOWS else "\n"
 
 
 class Game:
+    def __init__(self, plain=False):
+        self.plain = plain
+
     def __enter__(self):
         self.screen = pyte.HistoryScreen(80, 24, history=500)
         self.stream = pyte.Stream(self.screen)
         self.output = Queue()
         self.env = dict(os.environ, TERM="xterm-256color", PYTHONIOENCODING="utf-8")
         self.env.pop("NO_COLOR", None)
+        if self.plain:
+            self.env["NO_COLOR"] = "1"
         argv = [sys.executable, "-B", "-u", GAME]
         if WINDOWS:
             from winpty import PtyProcess
@@ -216,3 +221,11 @@ if __name__ == "__main__":
     print(sys.platform, sys.version.split()[0], "80 x 24")
     forest()
     ship()
+    with Game(plain=True) as game:
+        game.mode("forest")
+        game.wait("Press Enter to enter the forest >", "You are @")
+        game.text("")
+        game.wait(PROMPT, "@ You")
+        assert game.map()[1][1:3] == "@ "
+        game.send("x")
+    print("PASS explicit ASCII fallback")
